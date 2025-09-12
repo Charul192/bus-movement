@@ -1,0 +1,4 @@
+### Get Directions from A to B
+GET https://maps.googleapis.com/maps/api/directions/json?origin=New%20York,NY&destination=Los%20Angeles,CA&transit_mode=bus&units=metric&key=AIzaSyARSqYspchcCQGDRl1izB0_GaqQ6A2Yz6w
+
+GET https://maps.googleapis.com/maps/api/directions/json?destination=Montreal&origin=Toronto&key=AIzaSyARSqYspchcCQGDRl1izB0_GaqQ6A2Yz6w

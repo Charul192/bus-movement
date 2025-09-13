@@ -1,35 +1,437 @@
-<!doctype html>
-<!--
- @license
- Copyright 2019 Google LLC. All Rights Reserved.
- SPDX-License-Identifier: Apache-2.0
--->
-<html>
-  <head>
-    <title>Draggable Directions</title>
-
-    <link rel="stylesheet" type="text/css" href="./style.css" />
-    <script type="module" src="./index.ts"></script>
-  </head>
-  <body>
-    <div id="container">
-      <div id="map"></div>
-      <div id="sidebar">
-        <p>Total Distance: <span id="total"></span></p>
-        <div id="panel"></div>
-      </div>
-    </div>
-
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Bus Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <!-- 
-      The `defer` attribute causes the script to execute after the full HTML
-      document has been parsed. For non-blocking uses, avoiding race conditions,
-      and consistent behavior across browsers, consider loading using Promises. See
-      https://developers.google.com/maps/documentation/javascript/load-maps-js-api
-      for more information.
-      -->
-    <script
-      src="https://maps.googleapis.com/maps/api/js?key=AIzaSyB41DRUbKWJHPxaFjMAwdrzWzbVKartNGg&callback=initMap&v=weekly"
-      defer
-    ></script>
-  </body>
+      IMPORTANT: You must replace "YOUR_API_KEY" below with your actual Google Maps API key for the map to work.
+    -->
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyARSqYspchcCQGDRl1izB0_GaqQ6A2Yz6w&libraries=geometry,places&v=weekly"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom scrollbar for better aesthetics */
+        #bus-list::-webkit-scrollbar {
+            width: 8px;
+        }
+        #bus-list::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        #bus-list::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        #bus-list::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col md:flex-row h-screen overflow-hidden">
+
+    <!-- Sidebar -->
+    <aside class="w-full md:w-1/3 lg:w-1/4 bg-white shadow-lg flex flex-col h-1/3 md:h-screen">
+        <header class="p-4 border-b bg-indigo-600 text-white shadow-md">
+            <h1 class="text-2xl font-bold">Live Bus Tracker</h1>
+            <p id="current-time" class="text-sm opacity-90">Loading time...</p>
+        </header>
+        <div id="bus-list" class="flex-grow overflow-y-auto">
+            <!-- Bus cards will be injected here by JavaScript -->
+        </div>
+    </aside>
+
+    <!-- Main Content - Map -->
+    <main class="flex-grow h-2/3 md:h-screen">
+        <div id="map" class="w-full h-full bg-gray-300"></div>
+    </main>
+
+    <script>
+        // --- MOCK DATA & CONFIGURATION ---
+
+        /**
+         * Parses an ETA string (e.g., "1h 45m", "2h", "30m") into total seconds.
+         * @param {string} etaString - The ETA string to parse.
+         * @returns {number} The total time in seconds.
+         */
+        function parseEtaToSeconds(etaString) {
+            let totalSeconds = 0;
+            const hoursMatch = etaString.match(/(\d+)\s*h/);
+            const minutesMatch = etaString.match(/(\d+)\s*m/);
+
+            if (hoursMatch) {
+                totalSeconds += parseInt(hoursMatch[1], 10) * 3600;
+            }
+            if (minutesMatch) {
+                totalSeconds += parseInt(minutesMatch[1], 10) * 60;
+            }
+            return totalSeconds;
+        }
+
+        /**
+         * Generates mock bus data with start times relative to the current time.
+         * Note: The base time is set to a fixed point to make the demo predictable.
+         * In a real app, this data would come from a live API.
+         */
+        function getMockBusData() {
+            // Base time for our simulation: Sunday, September 14, 2025, 02:10:00 AM IST
+            const baseTime = new Date("2025-09-14T02:10:00+05:30");
+            
+            const createTimestamp = (minutesOffset) => {
+                return new Date(baseTime.getTime() + minutesOffset * 60000).toISOString();
+            };
+
+            return [
+                {
+                    busNumber: "PB-08-CX-5566",
+                    operator: "Punjab Roadways",
+                    phoneNumber: "+91 98765 43210",
+                    headsign: "Volvo A/C Seater (2+2)",
+                    route: { start: { name: "Amritsar" }, end: { name: "Jalandhar" } },
+                    startTime: createTimestamp(-15), // Started 15 mins ago
+                    eta: "1h 45m"
+                },
+                {
+                    busNumber: "PB-10-F-9876",
+                    operator: "Indo-Canadian",
+                    phoneNumber: "+91 99887 76655",
+                    headsign: "Mercedes-Benz Super High Deck",
+                    route: { start: { name: "Ludhiana" }, end: { name: "Chandigarh" } },
+                    startTime: createTimestamp(-5), // Started 5 mins ago
+                    eta: "2h 10m"
+                },
+                {
+                    busNumber: "CH-01-T-1111",
+                    operator: "CTU",
+                    phoneNumber: "+91 172 2700006",
+                    headsign: "AC Bus",
+                    route: { start: { name: "Chandigarh" }, end: { name: "Ambala" } },
+                    startTime: createTimestamp(2), // Starts in 2 mins
+                    eta: "1h 5m"
+                },
+                {
+                    busNumber: "PB-65-A-4321",
+                    operator: "Libra Bus Service",
+                    phoneNumber: "+91 94170 04321",
+                    headsign: "A/C Sleeper (2+1)",
+                    route: { start: { name: "Patiala" }, end: { name: "Delhi" } },
+                    startTime: createTimestamp(5), // Starts in 5 mins
+                    eta: "5h 30m"
+                },
+                {
+                    busNumber: "PB-11-BC-7890",
+                    operator: "Orbit Aviation",
+                    phoneNumber: "+91 98141 00055",
+                    headsign: "A/C Seater",
+                    route: { start: { name: "Bathinda" }, end: { name: "Ludhiana" } },
+                    startTime: createTimestamp(10),
+                    eta: "2h 45m"
+                },
+                {
+                    busNumber: "DL-1P-C-1234",
+                    operator: "DTC",
+                    phoneNumber: "+91 11 2337 1745",
+                    headsign: "Express 544",
+                    route: { start: { name: "ISBT Kashmiri Gate, Delhi" }, end: { name: "Meerut" } },
+                    startTime: createTimestamp(12),
+                    eta: "2h 0m"
+                },
+                {
+                    busNumber: "PB-02-AB-5544",
+                    operator: "Kisan Travels",
+                    phoneNumber: "+91 98155 94594",
+                    headsign: "Non-AC Seater",
+                    route: { start: { name: "Pathankot" }, end: { name: "Amritsar" } },
+                    startTime: createTimestamp(20),
+                    eta: "2h 30m"
+                },
+                {
+                    busNumber: "PB-13-Z-8888",
+                    operator: "Jujhar Travels",
+                    phoneNumber: "+91 98144 00088",
+                    headsign: "Volvo A/C Sleeper",
+                    route: { start: { name: "Sangrur" }, end: { name: "Chandigarh" } },
+                    startTime: createTimestamp(25),
+                    eta: "2h 15m"
+                },
+                {
+                    busNumber: "HR-55-X-7777",
+                    operator: "Haryana Roadways",
+                    phoneNumber: "+91 180 264 6537",
+                    headsign: "Volvo Cruiser",
+                    route: { start: { name: "Panipat" }, end: { name: "Karnal" } },
+                    startTime: createTimestamp(30),
+                    eta: "0h 45m"
+                },
+                {
+                    busNumber: "PB-06-W-1313",
+                    operator: "Kartar Bus Service",
+                    phoneNumber: "+91 98728 00013",
+                    headsign: "Standard Bus",
+                    route: { start: { name: "Anandpur Sahib" }, end: { name: "Nangal" } },
+                    startTime: createTimestamp(45),
+                    eta: "0h 30m"
+                }
+            ];
+        }
+
+
+        // --- GLOBAL VARIABLES ---
+        let map;
+        const allBusData = getMockBusData();
+        const activeBusAnimators = new Map();
+        const directionsService = new google.maps.DirectionsService();
+
+        // --- CORE APPLICATION LOGIC ---
+
+        class BusAnimator {
+            constructor(busData, map) {
+                this.busData = busData;
+                this.map = map;
+                this.marker = null;
+                this.polyline = null;
+                this.animationFrameId = null;
+                this.animationStartTime = 0;
+
+                this.etaInSeconds = parseEtaToSeconds(busData.eta);
+                this.routePolyline = null;
+                this.totalDistance = 0;
+            }
+
+            async start() {
+                try {
+                    const route = await this.getRoute();
+                    if (!route) return;
+
+                    this.routePolyline = google.maps.geometry.encoding.decodePath(route.overview_polyline);
+                    this.totalDistance = google.maps.geometry.spherical.computeLength(this.routePolyline);
+
+                    // Create route line on map
+                    this.polyline = new google.maps.Polyline({
+                        path: this.routePolyline,
+                        geodesic: true,
+                        strokeColor: '#4F46E5',
+                        strokeOpacity: 0.6,
+                        strokeWeight: 5,
+                        map: this.map,
+                    });
+                    
+                    // Create start and end markers
+                    this.createRouteMarkers(route);
+
+                    // Create the bus marker
+                    this.marker = new google.maps.Marker({
+                        position: this.routePolyline[0],
+                        map: this.map,
+                        icon: {
+                            url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#1D4ED8" width="40px" height="40px"><path d="M0 0h24v24H0z" fill="none"/><path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11C5.84 5 5.28 5.42 5.08 6.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.5 16c-.83 0-1.5-.67-1.5-1.5S5.67 13 6.5 13s1.5.67 1.5 1.5S7.33 16 6.5 16zm11 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zM5 11l1.5-4.5h11L19 11H5z"/></svg>'),
+                            anchor: new google.maps.Point(20, 20)
+                        },
+                        zIndex: 100
+                    });
+
+                    this.animationStartTime = performance.now();
+                    this.animate();
+
+                } catch (error) {
+                    console.error(`Failed to start animation for bus ${this.busData.busNumber}:`, error);
+                    this.cleanup();
+                }
+            }
+            
+            animate(timestamp) {
+                if (!this.animationStartTime) {
+                    this.animationStartTime = timestamp;
+                }
+                const elapsedTimeMs = timestamp - this.animationStartTime;
+                const elapsedTimeSec = elapsedTimeMs / 1000;
+                
+                // If animation is over, stop and clean up
+                if (elapsedTimeSec >= this.etaInSeconds) {
+                    this.marker.setPosition(this.routePolyline[this.routePolyline.length - 1]);
+                    this.cleanup(true);
+                    return;
+                }
+
+                const fraction = elapsedTimeSec / this.etaInSeconds;
+                const distanceCovered = this.totalDistance * fraction;
+                const currentPosition = this.getPointAtDistance(distanceCovered);
+
+                if (currentPosition) {
+                    this.marker.setPosition(currentPosition);
+                }
+
+                this.animationFrameId = requestAnimationFrame(this.animate.bind(this));
+            }
+
+            getPointAtDistance(distance) {
+                let traveled = 0;
+                for (let i = 0; i < this.routePolyline.length - 1; i++) {
+                    const legStart = this.routePolyline[i];
+                    const legEnd = this.routePolyline[i + 1];
+                    const legDistance = google.maps.geometry.spherical.computeDistanceBetween(legStart, legEnd);
+
+                    if (traveled + legDistance >= distance) {
+                        const fraction = (distance - traveled) / legDistance;
+                        return google.maps.geometry.spherical.interpolate(legStart, legEnd, fraction);
+                    }
+                    traveled += legDistance;
+                }
+                return this.routePolyline[this.routePolyline.length - 1]; // Fallback
+            }
+
+            getRoute() {
+                return new Promise((resolve, reject) => {
+                    const request = {
+                        origin: this.busData.route.start.name,
+                        destination: this.busData.route.end.name,
+                        travelMode: google.maps.TravelMode.DRIVING
+                    };
+                    directionsService.route(request, (result, status) => {
+                        if (status === 'OK') {
+                            resolve(result.routes[0]);
+                        } else {
+                            reject(`Directions request failed due to ${status}`);
+                        }
+                    });
+                });
+            }
+
+            createRouteMarkers(route) {
+                new google.maps.Marker({
+                    position: route.legs[0].start_location,
+                    map: this.map,
+                    icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: '#16A34A', strokeColor: '#FFFFFF', strokeWeight: 2 },
+                    title: `Start: ${route.legs[0].start_address}`
+                });
+                new google.maps.Marker({
+                    position: route.legs[0].end_location,
+                    map: this.map,
+                    icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: '#DC2626', strokeColor: '#FFFFFF', strokeWeight: 2 },
+                    title: `End: ${route.legs[0].end_address}`
+                });
+            }
+
+            cleanup(finished = false) {
+                if (this.animationFrameId) {
+                    cancelAnimationFrame(this.animationFrameId);
+                }
+                // Don't remove the bus marker if it finished, just the route polyline
+                if (!finished && this.marker) this.marker.setMap(null);
+                if (this.polyline) this.polyline.setMap(null);
+                
+                if(finished) {
+                   updateBusStatus(this.busData.busNumber, "Finished");
+                }
+            }
+        }
+
+        function initializeMap() {
+            map = new google.maps.Map(document.getElementById('map'), {
+                zoom: 8,
+                center: { lat: 31.1471, lng: 75.3412 }, // Centered on Punjab
+                mapTypeControl: false,
+                streetViewControl: false,
+                styles: [
+                    { elementType: "geometry", stylers: [{ color: "#f5f5f5" }] },
+                    { elementType: "labels.icon", stylers: [{ visibility: "off" }] },
+                    { elementType: "labels.text.fill", stylers: [{ color: "#616161" }] },
+                    { elementType: "labels.text.stroke", stylers: [{ color: "#f5f5f5" }] },
+                    { featureType: "administrative.land_parcel", stylers: [{ visibility: "off" }] },
+                    { featureType: "administrative.locality", elementType: "labels.text.fill", stylers: [{ color: "#bdbdbd" }] },
+                    { featureType: "poi", elementType: "geometry", stylers: [{ color: "#eeeeee" }] },
+                    { featureType: "poi", elementType: "labels.text.fill", stylers: [{ color: "#757575" }] },
+                    { featureType: "poi.park", elementType: "geometry", stylers: [{ color: "#e5e5e5" }] },
+                    { featureType: "poi.park", elementType: "labels.text.fill", stylers: [{ color: "#9e9e9e" }] },
+                    { featureType: "road", elementType: "geometry", stylers: [{ color: "#ffffff" }] },
+                    { featureType: "road.arterial", elementType: "labels.text.fill", stylers: [{ color: "#757575" }] },
+                    { featureType: "road.highway", elementType: "geometry", stylers: [{ color: "#dadada" }] },
+                    { featureType: "road.highway", elementType: "labels.text.fill", stylers: [{ color: "#616161" }] },
+                    { featureType: "road.local", elementType: "labels.text.fill", stylers: [{ color: "#9e9e9e" }] },
+                    { featureType: "transit.line", elementType: "geometry", stylers: [{ color: "#e5e5e5" }] },
+                    { featureType: "transit.station", elementType: "geometry", stylers: [{ color: "#eeeeee" }] },
+                    { featureType: "water", elementType: "geometry", stylers: [{ color: "#c9c9c9" }] },
+                    { featureType: "water", elementType: "labels.text.fill", stylers: [{ color: "#9e9e9e" }] }
+                ]
+            });
+            
+            renderBusList();
+            startClock();
+            startDispatcher();
+        }
+        
+        function renderBusList() {
+            const listElement = document.getElementById('bus-list');
+            let html = '';
+            allBusData.sort((a,b) => new Date(a.startTime) - new Date(b.startTime)).forEach(bus => {
+                const startTime = new Date(bus.startTime);
+                html += `
+                    <div id="bus-card-${bus.busNumber}" class="p-4 border-b hover:bg-gray-50 transition-colors duration-200">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="font-bold text-lg text-indigo-700">${bus.route.start.name} &rarr; ${bus.route.end.name}</span>
+                            <span id="status-${bus.busNumber}" class="text-xs font-semibold uppercase px-2 py-1 rounded-full bg-gray-200 text-gray-700">Upcoming</span>
+                        </div>
+                        <p class="text-sm text-gray-600">${bus.operator} - ${bus.headsign}</p>
+                        <p class="text-sm text-gray-600">Bus No: <span class="font-medium">${bus.busNumber}</span></p>
+                        <div class="flex justify-between items-baseline mt-2">
+                           <p class="text-sm text-gray-800">Departs: <span class="font-semibold">${startTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span></p>
+                           <p class="text-sm text-gray-800">Duration: <span class="font-semibold">${bus.eta}</span></p>
+                        </div>
+                    </div>
+                `;
+            });
+            listElement.innerHTML = html;
+        }
+
+        function updateBusStatus(busNumber, status) {
+            const statusEl = document.getElementById(`status-${busNumber}`);
+            if (!statusEl) return;
+
+            statusEl.textContent = status;
+            statusEl.classList.remove('bg-gray-200', 'text-gray-700', 'bg-blue-200', 'text-blue-800', 'bg-green-200', 'text-green-800');
+            
+            switch(status) {
+                case 'On Route':
+                    statusEl.classList.add('bg-blue-200', 'text-blue-800');
+                    break;
+                case 'Finished':
+                     statusEl.classList.add('bg-green-200', 'text-green-800');
+                    break;
+                default:
+                    statusEl.classList.add('bg-gray-200', 'text-gray-700');
+            }
+        }
+
+        function startClock() {
+            const timeElement = document.getElementById('current-time');
+            setInterval(() => {
+                timeElement.textContent = new Date().toLocaleString('en-IN', { dateStyle: 'full', timeStyle: 'medium' });
+            }, 1000);
+        }
+
+        function startDispatcher() {
+             setInterval(() => {
+                const now = new Date();
+                allBusData.forEach(bus => {
+                    const startTime = new Date(bus.startTime);
+                    if (now >= startTime && !activeBusAnimators.has(bus.busNumber)) {
+                        console.log(`Dispatching bus ${bus.busNumber}`);
+                        const animator = new BusAnimator(bus, map);
+                        activeBusAnimators.set(bus.busNumber, animator);
+                        animator.start();
+                        updateBusStatus(bus.busNumber, "On Route");
+                    }
+                });
+            }, 5000); // Check every 5 seconds
+        }
+
+        // --- INITIALIZATION ---
+        window.onload = initializeMap;
+
+    </script>
+</body>
 </html>
+
+
